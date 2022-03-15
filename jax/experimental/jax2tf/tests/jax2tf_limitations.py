@@ -974,21 +974,27 @@ class Jax2TfLimitation(primitive_harness.Limitation):
 
     def custom_assert(tst, r_jax, r_tf, *, args, tol, err_msg):
 
-      def _reconstruct_operand(result, is_tf: bool):
-        # Reconstructing operand as documented in numpy.linalg.svd (see
-        # https://numpy.org/doc/stable/reference/generated/numpy.linalg.svd.html)
+      # TODO: compute only a 2D slice to speedup the test.
+      def construct_identity_matrices(result):
+        # Constructs identity matrices from the left and right singular vectors.
+        # The singular values are untouched.
         s, u, v = result
-        U = u[..., :s.shape[-1]]
-        V = v[..., :s.shape[-1], :]
-        S = s[..., None, :]
-        return jnp.matmul(U * S, V), s.shape, u.shape, v.shape
+        m, n = u.shape[-2:]
+        if m > n:
+          identity_u = jnp.swapaxes(u, -2, -1).conj() @ u
+          identity_v = jnp.swapaxes(v, -2, -1).conj() @ v
+        else:
+          identity_u = u @ jnp.swapaxes(u, -2, -1).conj()
+          identity_v = v @ jnp.swapaxes(v, -2, -1).conj()
+
+        return s, identity_u, identity_v
 
       if compute_uv:
-        r_jax_reconstructed = _reconstruct_operand(r_jax, False)
-        r_tf_reconstructed = _reconstruct_operand(r_tf, True)
+        r_jax_postprocessed = construct_identity_matrices(r_jax)
+        r_tf_postprocessed = construct_identity_matrices(r_tf)
         tst.assertAllClose(
-            r_jax_reconstructed,
-            r_tf_reconstructed,
+            r_jax_postprocessed,
+            r_tf_postprocessed,
             atol=tol,
             rtol=tol,
             err_msg=err_msg)
@@ -1020,11 +1026,11 @@ class Jax2TfLimitation(primitive_harness.Limitation):
             devices=("cpu", "gpu"),
             modes=("eager", "graph", "compiled")),
         custom_numeric(
-            description="custom numeric comparison when compute_uv",
+            description="custom numeric comparison when compute_uv on CPU/GPU",
             custom_assert=custom_assert,
             devices=("cpu", "gpu"),
             modes=("eager", "graph", "compiled"),
-            enabled=(compute_uv == True))
+            enabled=(compute_uv == True)),
     ]
 
   @classmethod
